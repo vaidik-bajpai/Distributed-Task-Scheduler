@@ -33,7 +33,7 @@ var (
 
 type CoordinatorServer struct {
 	pb.UnimplementedCoordinatorServiceServer
-	serverPort            int64
+	serverPort            string
 	listener              net.Listener
 	grpcServer            *grpc.Server
 	WorkerPool            map[uint32]*workerInfo
@@ -57,10 +57,10 @@ type workerInfo struct {
 	workerServiceClient pb.WorkerServiceClient
 }
 
-func NewServer(port int64, dbConnString string) *CoordinatorServer {
+func NewServer(serverPort, dbConnString string) *CoordinatorServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &CoordinatorServer{
-		serverPort:            port,
+		serverPort:            serverPort,
 		dbConnString:          dbConnString,
 		WorkerPool:            make(map[uint32]*workerInfo),
 		maxHeartbeatMisses:    uint8(maxHeartbeatMisses),
@@ -217,7 +217,7 @@ func (s *CoordinatorServer) removeDeadWorkers() {
 
 func (s *CoordinatorServer) startGRPCServer() error {
 	var err error
-	s.listener, err = net.Listen("tcp", fmt.Sprintf(":%d", s.serverPort))
+	s.listener, err = net.Listen("tcp", s.serverPort)
 	if err != nil {
 		return err
 	}

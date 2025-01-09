@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,7 +40,7 @@ type Task struct {
 }
 
 type SchedulerServer struct {
-	serverPort   int64
+	serverPort   string
 	dbConnString string
 	dbPool       *pgxpool.Pool
 	ctx          context.Context
@@ -49,10 +48,10 @@ type SchedulerServer struct {
 	httpServer   *http.Server
 }
 
-func NewSchedulerServer(port int64, dbConnString string) *SchedulerServer {
+func NewSchedulerServer(serverPort, dbConnString string) *SchedulerServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerServer{
-		serverPort:   port,
+		serverPort:   serverPort,
 		dbConnString: dbConnString,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -70,7 +69,7 @@ func (s *SchedulerServer) Start() error {
 	http.HandleFunc("GET /status", s.handleGetTaskStatus)
 
 	s.httpServer = &http.Server{
-		Addr: fmt.Sprintf(":%d", s.serverPort),
+		Addr: s.serverPort,
 	}
 
 	go func() {
