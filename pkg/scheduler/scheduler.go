@@ -70,12 +70,12 @@ func (s *SchedulerServer) Start() error {
 	http.HandleFunc("GET /status", s.handleGetTaskStatus)
 
 	s.httpServer = &http.Server{
-		Addr: fmt.Sprintf(":", s.serverPort),
+		Addr: fmt.Sprintf(":%d", s.serverPort),
 	}
 
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %s\n")
+			log.Printf("Server error: %v\n", err)
 		}
 	}()
 
