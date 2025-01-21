@@ -1,4 +1,4 @@
-package coordinator
+package main
 
 import (
 	"context"
@@ -17,8 +17,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/vaidik-bajpai/distributed-task-scheduler/pkg/common"
-	pb "github.com/vaidik-bajpai/distributed-task-scheduler/pkg/grpcapi"
+	"github.com/vaidik-bajpai/D-Scheduler/common"
+	pb "github.com/vaidik-bajpai/D-Scheduler/common/grpcapi"
 )
 
 var (
