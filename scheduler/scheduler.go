@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/vaidik-bajpai/D-Scheduler/common"
 )
 
 var (
@@ -40,31 +39,27 @@ type Task struct {
 }
 
 type SchedulerServer struct {
-	serverPort   string
-	dbConnString string
-	dbPool       *pgxpool.Pool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	httpServer   *http.Server
+	serverPort string
+	store      storer
+	dbPool     *pgxpool.Pool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	httpServer *http.Server
 }
 
-func NewSchedulerServer(serverPort, dbConnString string) *SchedulerServer {
+func NewSchedulerServer(serverPort string, store storer) *SchedulerServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerServer{
-		serverPort:   serverPort,
-		dbConnString: dbConnString,
-		ctx:          ctx,
-		cancel:       cancel,
+		serverPort: serverPort,
+		store:      store,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
 func (s *SchedulerServer) Start() error {
-	var err error
-	s.dbPool, err = common.CreateDatebaseConnectionPool(context.Background(), s.dbConnString)
-	if err != nil {
-		return err
-	}
 
+	http.HandleFunc("GET /health", s.handleHandleHealth)
 	http.HandleFunc("POST /schedule", s.handleScheduleTask)
 	http.HandleFunc("GET /status", s.handleGetTaskStatus)
 
@@ -89,7 +84,7 @@ func (s *SchedulerServer) handleScheduleTask(w http.ResponseWriter, r *http.Requ
 	}
 
 	ctx := r.Context()
-	taskID, err := s.insertTaskIntoDB(ctx, &task)
+	taskID, err := s.store.insertTaskIntoDB(ctx, &task)
 	if err != nil {
 		http.Error(w, "could n't create the task requested", http.StatusInternalServerError)
 		return
@@ -108,6 +103,7 @@ func (s *SchedulerServer) handleScheduleTask(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(jsonResponse))
 }
 
@@ -115,7 +111,7 @@ func (s *SchedulerServer) handleGetTaskStatus(w http.ResponseWriter, r *http.Req
 	id := r.PathValue("id")
 
 	ctx := r.Context()
-	task, err := s.getTaskFromDB(ctx, id)
+	task, err := s.store.getTaskFromDB(ctx, id)
 	if err != nil {
 		http.Error(w, "could n't fetch the task from the database", http.StatusInternalServerError)
 		return
@@ -128,7 +124,14 @@ func (s *SchedulerServer) handleGetTaskStatus(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(jsonResponse))
+}
+
+func (s *SchedulerServer) handleHandleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("healthy"))
 }
 
 func (s *SchedulerServer) awaitShutDown() error {
@@ -149,49 +152,4 @@ func (s *SchedulerServer) Stop() error {
 	}
 	log.Println("Scheduler server and database pool stopped")
 	return nil
-}
-
-func (s *SchedulerServer) insertTaskIntoDB(ctx context.Context, task *CommandRequest) (string, error) {
-	query := `INSERT INTO tasks (command, scheduled_at) VALUES (?, ?) RETURNING id`
-
-	ctx, cancel := context.WithTimeout(ctx, QueryTimeDuration)
-	defer cancel()
-
-	var insertedId string
-
-	err := s.dbPool.QueryRow(
-		ctx,
-		query,
-		task.Command,
-		task.ScheduledAt,
-	).Scan(&insertedId)
-	if err != nil {
-		return "", err
-	}
-
-	return insertedId, nil
-}
-
-func (s *SchedulerServer) getTaskFromDB(ctx context.Context, taskID string) (*Task, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*QueryTimeDuration)
-	defer cancel()
-
-	query := `SELECT * FROM tasks WHERE $1`
-
-	var task Task
-
-	err := s.dbPool.QueryRow(ctx, query, taskID).Scan(
-		&task.ID,
-		&task.Command,
-		&task.ScheduledAt,
-		&task.PickedAt,
-		&task.StartedAt,
-		&task.CompletedAt,
-		&task.FailedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return &task, nil
 }
