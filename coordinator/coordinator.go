@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/vaidik-bajpai/D-Scheduler/common"
+	"github.com/jackc/pgx/v4"
 	pb "github.com/vaidik-bajpai/D-Scheduler/common/grpcapi"
 )
 
@@ -33,6 +33,8 @@ var (
 
 type CoordinatorServer struct {
 	pb.UnimplementedCoordinatorServiceServer
+	logger                *zap.Logger
+	store                 storer
 	serverPort            string
 	listener              net.Listener
 	grpcServer            *grpc.Server
@@ -44,7 +46,6 @@ type CoordinatorServer struct {
 	heartbeatTimeInterval time.Duration
 	roundRobinIndex       uint32
 	dbConnString          string
-	dbPool                *pgxpool.Pool
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	wg                    sync.WaitGroup
@@ -57,9 +58,17 @@ type workerInfo struct {
 	workerServiceClient pb.WorkerServiceClient
 }
 
-func NewServer(serverPort, dbConnString string) *CoordinatorServer {
+type UpdateTask struct {
+	taskID    string
+	column    string
+	timestamp time.Time
+}
+
+func NewServer(serverPort, dbConnString string, logger *zap.Logger, store storer) *CoordinatorServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &CoordinatorServer{
+		logger:                logger,
+		store:                 store,
 		serverPort:            serverPort,
 		dbConnString:          dbConnString,
 		WorkerPool:            make(map[uint32]*workerInfo),
@@ -78,12 +87,7 @@ func (s *CoordinatorServer) Start() error {
 		return fmt.Errorf("gRPC server start failed: %w", err)
 	}
 
-	ctx := context.Background()
-	s.dbPool, err = common.CreateDatebaseConnectionPool(ctx, s.dbConnString)
-	if err != nil {
-		return fmt.Errorf("failed to connect to the database: %w", err)
-	}
-
+	s.logger.Info("Launching the scan database thread")
 	go s.scanDatabase()
 
 	return s.awaitShutDown()
@@ -109,31 +113,28 @@ func (s *CoordinatorServer) UpdateTaskStatus(ctx context.Context, in *pb.UpdateT
 		return nil, errors.ErrUnsupported
 	}
 
-	updateQuery := fmt.Sprintf("UPDATE tasks SET %s = $1 WHERE id = $2", column)
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	_, err := s.dbPool.Exec(ctx, updateQuery, timestamp, taskID)
-	if err != nil {
-		log.Printf("could not update the task status: %v\n", err)
-		return nil, err
+	if err := s.store.updateTaskStatus(ctx, &UpdateTask{
+		taskID:    taskID,
+		column:    column,
+		timestamp: timestamp,
+	}); err != nil {
+		return &pb.UpdateTaskStatusResponse{Success: false}, err
 	}
 
-	return &pb.UpdateTaskStatusResponse{Success: true}, err
+	return &pb.UpdateTaskStatusResponse{Success: true}, nil
 }
 
 func (s *CoordinatorServer) SendHeartbeat(ctx context.Context, in *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
 	workerID := in.GetWorkerID()
 
 	if worker, ok := s.WorkerPool[workerID]; ok {
-		//reset heartbeat misses
 		worker.heartbeatMisses = 0
 	} else {
-		log.Println("first heartbeat from the worker")
+		s.logger.Info("First heartbeat from the worker")
 		address := in.GetAddress()
 		conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			log.Printf("could not establish a grpc connection with the worker %d\n", workerID)
+			s.logger.Error(fmt.Sprintf("could not establish a grpc connection with the worker %d", workerID))
 			return nil, err
 		}
 
@@ -154,7 +155,7 @@ func (s *CoordinatorServer) SendHeartbeat(ctx context.Context, in *pb.HeartbeatR
 			s.WorkerPoolKeys = append(s.WorkerPoolKeys, k)
 		}
 
-		log.Println("new worker registered")
+		s.logger.Info("new worker registered")
 	}
 
 	return &pb.HeartbeatResponse{}, nil
@@ -169,7 +170,7 @@ func (s *CoordinatorServer) SubmitTask(ctx context.Context, in *pb.ClientTaskReq
 	}
 
 	if err := s.submitTaskToWorker(task); err != nil {
-		log.Printf("could not submit task to a worker %v\n", err)
+		s.logger.Error(fmt.Sprintf("could not submit task to a worker %v", err))
 		return nil, err
 	}
 
@@ -227,7 +228,7 @@ func (s *CoordinatorServer) startGRPCServer() error {
 
 	go func() {
 		if err := s.grpcServer.Serve(s.listener); err != nil {
-			log.Printf("gRPC server failed : %v", err)
+			s.logger.Error(fmt.Sprintf("gRPC server failed : %v", err))
 		}
 	}()
 
@@ -253,72 +254,30 @@ type Task struct {
 }
 
 func (s *CoordinatorServer) executeAllScheduledTasks() {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	tx, err := s.dbPool.Begin(ctx)
-	if err != nil {
-		log.Println("could not start a transaction")
-		return
-	}
-
-	defer func() {
-		if err := tx.Rollback(ctx); err != nil {
-			log.Println("could not rollback the transaction")
-		}
-	}()
-
-	getQuery := `
-		SELECT id, command FROM tasks 
-		WHERE scheduled_at < (NOW() + INTERVAL '30 seconds') AND picked_at IS NULL 
-		ORDER BY scheduled_at 
-		FOR UPDATE SKIP LOCKED
-	`
-
-	rows, err := tx.Query(ctx, getQuery)
-	if err != nil {
-		log.Println("could not fetch the tasks scheduled for execution")
-		return
-	}
-	defer rows.Close()
-
-	var tasks []*pb.TaskRequest
-	for rows.Next() {
-		var id, command string
-		if err := rows.Scan(&id, &command); err != nil {
-			log.Println("could not scan the row")
-			return
-		}
-
-		tasks = append(tasks, &pb.TaskRequest{
-			TaskID: id,
-			Data:   command,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Println("error while iterating over tasks")
-		return
-	}
-
-	updateQuery := `UPDATE tasks SET picked_at = NOW() WHERE id = $1`
-	for _, task := range tasks {
-		if err := s.submitTaskToWorker(task); err != nil {
-			log.Println("could not submit this task to the worker")
-			continue
-		}
-
-		_, err = tx.Exec(ctx, updateQuery, task.GetTaskID())
+	if err := s.store.withTransaction(ctx, func(tx pgx.Tx) error {
+		tasks, err := s.store.getScheduledTasksFromDB(ctx, tx)
 		if err != nil {
-			log.Println("could not update the picked at field of the task ", task.GetTaskID())
-			continue
+			return fmt.Errorf("error fetching the scheduled tasks for execution: %v", err)
 		}
-	}
 
-	if err := tx.Commit(ctx); err != nil {
-		log.Printf("Failed to commit the transaction")
-	}
+		for _, task := range tasks {
+			if err := s.submitTaskToWorker(task); err != nil {
+				log.Printf("could not submit task {id:%s} to worker.", task.GetTaskID())
+				continue
+			}
 
+			if err := s.store.updatePickedAtStatus(ctx, tx, task.GetTaskID()); err != nil {
+				log.Printf("could update the picked at status of the task {id:%s}", task.GetTaskID())
+			}
+		}
+
+		return nil
+	}); err != nil {
+		log.Printf("error while executing the scheduled tasks: %v", err)
+	}
 }
 
 func (s *CoordinatorServer) submitTaskToWorker(task *pb.TaskRequest) error {
@@ -375,7 +334,6 @@ func (s *CoordinatorServer) Stop() error {
 		s.listener.Close()
 	}
 
-	//Don't forget to close the connections
-	s.dbPool.Close()
+	s.store.Close()
 	return nil
 }
