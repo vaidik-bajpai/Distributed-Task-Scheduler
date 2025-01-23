@@ -124,7 +124,7 @@ func (s *CoordinatorServer) UpdateTaskStatus(ctx context.Context, in *pb.UpdateT
 	return &pb.UpdateTaskStatusResponse{Success: true}, nil
 }
 
-func (s *CoordinatorServer) SendHeartbeat(ctx context.Context, in *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+func (s *CoordinatorServer) SendHeartBeat(ctx context.Context, in *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
 	workerID := in.GetWorkerID()
 
 	if worker, ok := s.WorkerPool[workerID]; ok {
@@ -158,7 +158,7 @@ func (s *CoordinatorServer) SendHeartbeat(ctx context.Context, in *pb.HeartbeatR
 		s.logger.Info("new worker registered")
 	}
 
-	return &pb.HeartbeatResponse{}, nil
+	return &pb.HeartbeatResponse{Acknowledged: true}, nil
 }
 
 func (s *CoordinatorServer) SubmitTask(ctx context.Context, in *pb.ClientTaskRequest) (*pb.ClientTaskResponse, error) {
@@ -181,6 +181,7 @@ func (s *CoordinatorServer) SubmitTask(ctx context.Context, in *pb.ClientTaskReq
 }
 
 func (s *CoordinatorServer) manageWorkerPool() {
+	log.Println("manage worker pool called")
 	ticker := time.NewTicker(time.Duration(maxHeartbeatMisses) * s.heartbeatTimeInterval)
 	defer ticker.Stop()
 
@@ -193,6 +194,7 @@ func (s *CoordinatorServer) manageWorkerPool() {
 }
 
 func (s *CoordinatorServer) removeDeadWorkers() {
+	log.Println("remove worker called")
 	s.WorkerPoolMutex.Lock()
 	defer s.WorkerPoolMutex.Unlock()
 
