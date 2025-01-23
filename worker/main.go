@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -12,6 +14,9 @@ var (
 func main() {
 	flag.Parse()
 
-	worker := NewServer(*workerPort, *coordinatorPort)
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
+	worker := NewServer(*workerPort, *coordinatorPort, logger)
 	worker.Start()
 }

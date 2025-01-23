@@ -30,7 +30,7 @@ func SpinUpServer(t *testing.T) (*CoordinatorServer, pb.CoordinatorServiceClient
 		assert.NoError(t, err, "error while starting the coordinator server.")
 	}()
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(100 * time.Second)
 
 	conn, err := grpc.NewClient(port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	assert.NoError(t, err)

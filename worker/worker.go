@@ -6,7 +6,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/vaidik-bajpai/D-Scheduler/common"
 	pb "github.com/vaidik-bajpai/D-Scheduler/common/grpcapi"
+	"go.uber.org/zap"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,6 +30,7 @@ const (
 type WorkerServer struct {
 	pb.UnimplementedWorkerServiceServer
 	id                       uint32
+	logger                   *zap.Logger
 	serverPort               string
 	coordinatorAddr          string
 	listener                 net.Listener
@@ -42,10 +46,11 @@ type WorkerServer struct {
 	wg                       sync.WaitGroup
 }
 
-func NewServer(serverPort, coordinatorAddr string) *WorkerServer {
+func NewServer(serverPort, coordinatorAddr string, logger *zap.Logger) *WorkerServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WorkerServer{
 		id:                uuid.New().ID(),
+		logger:            logger,
 		serverPort:        serverPort,
 		coordinatorAddr:   coordinatorAddr,
 		heartbeatInterval: common.DefaulHeartbeatInterval,
@@ -229,7 +234,52 @@ func (s *WorkerServer) updateTaskStatus(task *pb.TaskRequest, status pb.TaskStat
 }
 
 func (s *WorkerServer) processTask(task *pb.TaskRequest) {
-	log.Printf("Processing task: %+v", task)
-	time.Sleep(taskProcessTime)
-	log.Printf("Completed task: %+v", task)
+	s.logger.Info("worker executing python command for the task",
+		zap.String("taskID", task.GetTaskID()),
+		zap.Uint32("workerID", s.id),
+	)
+
+	pythonScript := strings.TrimPrefix(task.Data, "python3 -c ")
+	pythonScript = pythonScript[1 : len(pythonScript)-1]
+	pythonScript = strings.ReplaceAll(pythonScript, `\"`, `"`)
+
+	s.logger.Info("python script to be executed", zap.String("Python Script :", pythonScript))
+
+	tmpFile, err := os.CreateTemp("", "script-*.py")
+	if err != nil {
+		s.logger.Error("Worker failed to create the temporary directory.", zap.Uint32("worker id", s.id), zap.Error(err))
+		return
+	}
+	defer tmpFile.Close()
+
+	_, err = tmpFile.WriteString(pythonScript)
+	if err != nil {
+		s.logger.Error("Worker could not write to the script file", zap.Uint32("worker id", s.id), zap.Error(err))
+		return
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		s.logger.Error("Worker could n't close the temp file (python script file)", zap.Uint32("worker id", s.id), zap.Error(err))
+		return
+	}
+
+	cmd := exec.Command("python3", tmpFile.Name())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		s.logger.Error("worker failed to execute python script for the task",
+			zap.String("task id", task.GetTaskID()),
+			zap.Uint32("worker id", s.id),
+		)
+		return
+	}
+
+	s.logger.Info("worker successfully executed the python script of the task",
+		zap.String("task id", task.GetTaskID()),
+		zap.Uint32("worker id", s.id),
+	)
+
+	s.logger.Info("output of the task",
+		zap.String("Output", string(output)),
+	)
+
 }
