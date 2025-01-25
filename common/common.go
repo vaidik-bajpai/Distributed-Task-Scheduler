@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -21,35 +20,14 @@ var (
 )
 
 func GetDBConnectionString() string {
-	var missingEnvVars []string
-
-	checkEnvVar := func(envVar, envVarName string) {
-		if envVar == "" {
-			missingEnvVars = append(missingEnvVars, envVarName)
-		}
+	dbConnString, ok := os.LookupEnv("DB_CONN_STRING")
+	if !ok {
+		return ""
 	}
 
-	dbUser := os.Getenv("POSTGRES_USER")
-	checkEnvVar(dbUser, "POSTGRES_USER")
-
-	dbPassword := os.Getenv("POSTGRES_PASSWORD")
-	checkEnvVar(dbPassword, "POSTGRES_PASSWORD")
-
-	dbName := os.Getenv("POSTGRES_DB")
-	checkEnvVar(dbName, "POSTGRES_DB")
-
-	dbHost := os.Getenv("POSTGRES_HOST")
-	if dbHost == "" {
-		dbHost = "localhost"
-	}
-
-	if len(missingEnvVars) > 0 {
-		log.Fatalf("The following required environment variables are not set: %s",
-			strings.Join(missingEnvVars, ", "))
-	}
-
-	return fmt.Sprintf("postgres://%s:%s@%s:5432/%s", dbUser, dbPassword, dbHost, dbName)
+	return dbConnString
 }
+
 func CreateDatebaseConnectionPool(ctx context.Context, dbConnString string) (*pgxpool.Pool, error) {
 	var dbPool *pgxpool.Pool
 	var err error
@@ -58,6 +36,7 @@ func CreateDatebaseConnectionPool(ctx context.Context, dbConnString string) (*pg
 		if err == nil {
 			break
 		}
+		log.Printf("error happened while trying to connect to db (retries left [%d]): %v", maxRetries-(i+1), err)
 		time.Sleep(retryAfter)
 	}
 

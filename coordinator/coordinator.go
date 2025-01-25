@@ -241,12 +241,14 @@ func (s *CoordinatorServer) scanDatabase() {
 	ticker := time.NewTicker(scanTimeInterval)
 	defer ticker.Stop()
 
-	select {
-	case <-ticker.C:
-		s.executeAllScheduledTasks()
-	case <-s.ctx.Done():
-		log.Println("Shutting down database scanner.")
-		return
+	for {
+		select {
+		case <-ticker.C:
+			s.executeAllScheduledTasks()
+		case <-s.ctx.Done():
+			log.Println("Shutting down database scanner.")
+			return
+		}
 	}
 }
 
@@ -256,6 +258,8 @@ type Task struct {
 }
 
 func (s *CoordinatorServer) executeAllScheduledTasks() {
+	s.logger.Info("execute all schedule tsaks called")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

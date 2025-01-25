@@ -169,7 +169,6 @@ func (s *WorkerServer) Stop() error {
 	s.closeGRPCConnection()
 	log.Printf("the worker has been stopped")
 	return nil
-
 }
 
 func (s *WorkerServer) closeGRPCConnection() {
@@ -214,11 +213,12 @@ func (s *WorkerServer) startWorkerPool(workerPoolSize uint32) {
 func (s *WorkerServer) worker() {
 	defer s.wg.Done()
 
-	for {
-		select {
-		case task := <-s.taskQueue:
-			go s.updateTaskStatus(task, pb.TaskStatus_STARTED)
-			s.processTask(task)
+	for task := range s.taskQueue {
+		go s.updateTaskStatus(task, pb.TaskStatus_STARTED)
+		err := s.processTask(task)
+		if err != nil {
+			go s.updateTaskStatus(task, pb.TaskStatus_FAILED)
+		} else {
 			go s.updateTaskStatus(task, pb.TaskStatus_COMPLETE)
 		}
 	}
@@ -233,7 +233,7 @@ func (s *WorkerServer) updateTaskStatus(task *pb.TaskRequest, status pb.TaskStat
 	})
 }
 
-func (s *WorkerServer) processTask(task *pb.TaskRequest) {
+func (s *WorkerServer) processTask(task *pb.TaskRequest) error {
 	s.logger.Info("worker executing python command for the task",
 		zap.String("taskID", task.GetTaskID()),
 		zap.Uint32("workerID", s.id),
@@ -248,19 +248,19 @@ func (s *WorkerServer) processTask(task *pb.TaskRequest) {
 	tmpFile, err := os.CreateTemp("", "script-*.py")
 	if err != nil {
 		s.logger.Error("Worker failed to create the temporary directory.", zap.Uint32("worker id", s.id), zap.Error(err))
-		return
+		return err
 	}
 	defer tmpFile.Close()
 
 	_, err = tmpFile.WriteString(pythonScript)
 	if err != nil {
 		s.logger.Error("Worker could not write to the script file", zap.Uint32("worker id", s.id), zap.Error(err))
-		return
+		return err
 	}
 
 	if err := tmpFile.Close(); err != nil {
 		s.logger.Error("Worker could n't close the temp file (python script file)", zap.Uint32("worker id", s.id), zap.Error(err))
-		return
+		return err
 	}
 
 	cmd := exec.Command("python3", tmpFile.Name())
@@ -270,7 +270,7 @@ func (s *WorkerServer) processTask(task *pb.TaskRequest) {
 			zap.String("task id", task.GetTaskID()),
 			zap.Uint32("worker id", s.id),
 		)
-		return
+		return err
 	}
 
 	s.logger.Info("worker successfully executed the python script of the task",
@@ -281,5 +281,5 @@ func (s *WorkerServer) processTask(task *pb.TaskRequest) {
 	s.logger.Info("output of the task",
 		zap.String("Output", string(output)),
 	)
-
+	return nil
 }

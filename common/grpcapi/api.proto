@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package grpcapi;
 
-option go_package = "github.com/vaidik-bajpai/distributed-task-scheduler/pkg/grpcapi";
+option go_package = "github.com/vaidik-bajpai/distributed-task-scheduler/common/grpcapi";
 
 enum TaskStatus {
     QUEUED = 0;

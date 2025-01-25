@@ -10,15 +10,19 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestStartSchedulerServer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
 	mockStore := NewMockstorer(ctrl)
 	port := ":8080"
-	schSrv := NewSchedulerServer(port, mockStore)
+	schSrv := NewSchedulerServer(port, mockStore, logger)
 
 	go func() {
 		err := schSrv.Start()
@@ -36,6 +40,9 @@ func TestScheduleTask(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
 	mockStore := NewMockstorer(ctrl)
 	id := uuid.New().String()
 
@@ -44,7 +51,7 @@ func TestScheduleTask(t *testing.T) {
 		Return(id, nil)
 
 	port := ":8080"
-	schSrv := NewSchedulerServer(port, mockStore)
+	schSrv := NewSchedulerServer(port, mockStore, logger)
 
 	go func() {
 		err := schSrv.Start()
@@ -73,6 +80,9 @@ func TestGetTaskStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
 	mockStore := NewMockstorer(ctrl)
 
 	mockTask := &Task{
@@ -86,7 +96,7 @@ func TestGetTaskStatus(t *testing.T) {
 		Return(mockTask, nil).Times(1)
 
 	port := ":8080"
-	schSrv := NewSchedulerServer(port, mockStore)
+	schSrv := NewSchedulerServer(port, mockStore, logger)
 
 	go func() {
 		err := schSrv.Start()

@@ -20,7 +20,7 @@ func NewDB(connPool *pgxpool.Pool) *DB {
 }
 
 func (d *DB) insertTaskIntoDB(ctx context.Context, task *CommandRequest) (string, error) {
-	query := `INSERT INTO tasks (command, scheduled_at) VALUES (?, ?) RETURNING id`
+	query := `INSERT INTO tasks (command, scheduled_at) VALUES ($1, $2) RETURNING id`
 
 	ctx, cancel := context.WithTimeout(ctx, QueryTimeDuration)
 	defer cancel()

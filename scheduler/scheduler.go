@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
+	"go.uber.org/zap"
 )
 
 var (
@@ -40,6 +41,7 @@ type Task struct {
 
 type SchedulerServer struct {
 	serverPort string
+	logger     *zap.Logger
 	store      storer
 	dbPool     *pgxpool.Pool
 	ctx        context.Context
@@ -47,10 +49,11 @@ type SchedulerServer struct {
 	httpServer *http.Server
 }
 
-func NewSchedulerServer(serverPort string, store storer) *SchedulerServer {
+func NewSchedulerServer(serverPort string, store storer, logger *zap.Logger) *SchedulerServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerServer{
 		serverPort: serverPort,
+		logger:     logger,
 		store:      store,
 		ctx:        ctx,
 		cancel:     cancel,
@@ -77,8 +80,11 @@ func (s *SchedulerServer) Start() error {
 }
 
 func (s *SchedulerServer) handleScheduleTask(w http.ResponseWriter, r *http.Request) {
+	s.logger.Info("schedule task requested")
+
 	var task CommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+		log.Printf("an error happened while the decoding the schedule task paylaod: %v\n", err)
 		http.Error(w, "could n't decode the request payload", http.StatusBadRequest)
 		return
 	}
@@ -86,6 +92,7 @@ func (s *SchedulerServer) handleScheduleTask(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	taskID, err := s.store.insertTaskIntoDB(ctx, &task)
 	if err != nil {
+		log.Printf("error happened when inserting task to db: %v\n", err)
 		http.Error(w, "could n't create the task requested", http.StatusInternalServerError)
 		return
 	}
